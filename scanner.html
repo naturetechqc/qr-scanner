@@ -5,10 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QR Scanner</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 16px; }
+    body { font-family: Arial, sans-serif; text-align: center; padding: 16px; margin: 0; }
     #reader { width: 100%; max-width: 360px; margin: 16px auto; }
-    #status { margin-top: 10px; color: #444; word-break: break-all; }
+    #status { margin-top: 10px; color: #444; word-break: break-all; min-height: 24px; }
     button { padding: 10px 14px; margin-top: 12px; }
+    .ok { color: #0a7a2f; font-weight: bold; }
+    .err { color: #c62828; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -17,6 +19,9 @@
   <div id="reader"></div>
   <div id="status">초기화 중...</div>
   <button id="closeBtn">닫기</button>
+
+  <!-- 결과 저장용 hidden iframe -->
+  <iframe name="saveTarget" id="saveTarget" style="display:none;"></iframe>
 
   <script src="https://unpkg.com/html5-qrcode"></script>
   <script>
@@ -27,41 +32,58 @@
       return new URL(location.href).searchParams.get(name) || "";
     }
 
-    function setStatus(msg) {
-      document.getElementById("status").textContent = msg;
+    function setStatus(msg, type) {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = type || "";
     }
 
-    async function submitResult(code) {
-      const endpoint = qs("endpoint");
-      const token = qs("token");
+    function submitResultByHiddenForm(code) {
+      return new Promise((resolve, reject) => {
+        const endpoint = qs("endpoint");
+        const token = qs("token");
 
-      if (!endpoint || !token) {
-        setStatus("endpoint 또는 token 누락");
-        return;
-      }
+        if (!endpoint || !token) {
+          reject(new Error("endpoint 또는 token 누락"));
+          return;
+        }
 
-      const form = document.createElement("form");
-      form.method = "POST";
-      form.action = endpoint;
-      form.style.display = "none";
+        const iframe = document.getElementById("saveTarget");
 
-      const action = document.createElement("input");
-      action.name = "action";
-      action.value = "saveScan";
+        const cleanup = () => {
+          iframe.onload = null;
+        };
 
-      const t = document.createElement("input");
-      t.name = "token";
-      t.value = token;
+        iframe.onload = () => {
+          cleanup();
+          resolve(true);
+        };
 
-      const c = document.createElement("input");
-      c.name = "code";
-      c.value = code;
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = endpoint;
+        form.target = "saveTarget";
+        form.style.display = "none";
 
-      form.appendChild(action);
-      form.appendChild(t);
-      form.appendChild(c);
-      document.body.appendChild(form);
-      form.submit();
+        const addField = (name, value) => {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = name;
+          input.value = value;
+          form.appendChild(input);
+        };
+
+        addField("action", "saveScan");
+        addField("token", token);
+        addField("code", code);
+
+        document.body.appendChild(form);
+        form.submit();
+
+        setTimeout(() => {
+          form.remove();
+        }, 1000);
+      });
     }
 
     async function startScan() {
@@ -75,29 +97,52 @@
             if (sent) return;
 
             const code = String(decodedText || "").trim();
+            console.log("스캔된 QR:", code);
+
             if (!/^NTQCM\d{8}-\d{3}$/.test(code)) {
-              setStatus("형식이 맞지 않는 QR입니다.");
+              setStatus("형식이 맞지 않는 QR입니다.", "err");
               return;
             }
 
             sent = true;
-            setStatus("유효한 QR 확인: " + code);
+            setStatus("유효한 QR 확인: " + code, "ok");
 
             if (navigator.vibrate) navigator.vibrate(150);
 
             try {
               await qr.stop();
-            } catch (e) {}
+            } catch (e) {
+              console.warn("스캐너 중지 경고:", e);
+            }
 
-            await submitResult(code);
+            try {
+              setStatus("결과 저장 중...", "");
+              await submitResultByHiddenForm(code);
+
+              setStatus("저장 완료. 창을 닫습니다...", "ok");
+
+              setTimeout(() => {
+                window.close();
+
+                // 자동 닫기가 막히는 브라우저 대비
+                setTimeout(() => {
+                  setStatus("자동으로 닫히지 않으면 아래 닫기 버튼을 눌러주세요.", "");
+                }, 500);
+              }, 700);
+
+            } catch (err) {
+              console.error(err);
+              sent = false;
+              setStatus("저장 실패: " + (err.message || err), "err");
+            }
           },
           () => {}
         );
 
-        setStatus("카메라 시작 완료");
+        setStatus("카메라 시작 완료", "");
       } catch (err) {
         console.error(err);
-        setStatus("카메라 실행 실패: " + (err.message || err));
+        setStatus("카메라 실행 실패: " + (err.message || err), "err");
       }
     }
 
