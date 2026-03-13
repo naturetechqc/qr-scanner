@@ -122,7 +122,7 @@
         qr = new Html5Qrcode("reader");
   
         await qr.start(
-          { facingMode: { ideal: "environment" } },
+          { facingMode: { exact: "environment" } },
           {
             fps: 6, // 너무 높이면 중복 인식이 많아짐
             qrbox: { width: 220, height: 220 }, // 박스 줄이면 처리량 감소
@@ -150,4 +150,5 @@
   </script>
 </body>
 </html>
+
 
