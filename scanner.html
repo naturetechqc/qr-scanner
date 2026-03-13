@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QR Scanner</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding: 16px; }
+    #reader { width: 100%; max-width: 360px; margin: 16px auto; }
+    #status { margin-top: 10px; color: #444; word-break: break-all; }
+    button { padding: 10px 14px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <h3>QR 코드 스캔</h3>
+  <div>카메라 권한을 허용한 뒤 QR을 비춰주세요.</div>
+  <div id="reader"></div>
+  <div id="status">초기화 중...</div>
+  <button id="closeBtn">닫기</button>
+
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script>
+    let qr = null;
+    let sent = false;
+
+    function qs(name) {
+      return new URL(location.href).searchParams.get(name) || "";
+    }
+
+    function setStatus(msg) {
+      document.getElementById("status").textContent = msg;
+    }
+
+    async function submitResult(code) {
+      const endpoint = qs("endpoint");
+      const token = qs("token");
+
+      if (!endpoint || !token) {
+        setStatus("endpoint 또는 token 누락");
+        return;
+      }
+
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = endpoint;
+      form.style.display = "none";
+
+      const action = document.createElement("input");
+      action.name = "action";
+      action.value = "saveScan";
+
+      const t = document.createElement("input");
+      t.name = "token";
+      t.value = token;
+
+      const c = document.createElement("input");
+      c.name = "code";
+      c.value = code;
+
+      form.appendChild(action);
+      form.appendChild(t);
+      form.appendChild(c);
+      document.body.appendChild(form);
+      form.submit();
+    }
+
+    async function startScan() {
+      try {
+        qr = new Html5Qrcode("reader");
+
+        await qr.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          async (decodedText) => {
+            if (sent) return;
+
+            const code = String(decodedText || "").trim();
+            if (!/^NTQCM\d{8}-\d{3}$/.test(code)) {
+              setStatus("형식이 맞지 않는 QR입니다.");
+              return;
+            }
+
+            sent = true;
+            setStatus("유효한 QR 확인: " + code);
+
+            if (navigator.vibrate) navigator.vibrate(150);
+
+            try {
+              await qr.stop();
+            } catch (e) {}
+
+            await submitResult(code);
+          },
+          () => {}
+        );
+
+        setStatus("카메라 시작 완료");
+      } catch (err) {
+        console.error(err);
+        setStatus("카메라 실행 실패: " + (err.message || err));
+      }
+    }
+
+    document.getElementById("closeBtn").addEventListener("click", async () => {
+      try {
+        if (qr) await qr.stop();
+      } catch (e) {}
+      window.close();
+    });
+
+    window.addEventListener("load", startScan);
+  </script>
+</body>
+</html>
