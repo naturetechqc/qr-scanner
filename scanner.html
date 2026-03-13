@@ -5,12 +5,47 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QR Scanner</title>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 16px; margin: 0; }
-    #reader { width: 100%; max-width: 360px; margin: 16px auto; }
-    #status { margin-top: 10px; color: #444; word-break: break-all; min-height: 24px; }
-    button { padding: 10px 14px; margin-top: 12px; }
-    .ok { color: #0a7a2f; font-weight: bold; }
-    .err { color: #c62828; font-weight: bold; }
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 16px;
+      margin: 0;
+      background: #fff;
+    }
+
+    h3 {
+      margin: 0 0 8px 0;
+    }
+
+    #reader {
+      width: 100%;
+      max-width: 360px;
+      margin: 16px auto;
+    }
+
+    #status {
+      margin-top: 10px;
+      color: #444;
+      word-break: break-all;
+      min-height: 24px;
+      line-height: 1.4;
+    }
+
+    button {
+      padding: 10px 14px;
+      margin-top: 12px;
+      cursor: pointer;
+    }
+
+    .ok {
+      color: #0a7a2f;
+      font-weight: bold;
+    }
+
+    .err {
+      color: #c62828;
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
@@ -18,77 +53,90 @@
   <div>카메라 권한을 허용한 뒤 QR을 비춰주세요.</div>
   <div id="reader"></div>
   <div id="status">초기화 중...</div>
-  <button id="closeBtn">닫기</button>
-
-  <!-- 결과 저장용 hidden iframe -->
-  <iframe name="saveTarget" id="saveTarget" style="display:none;"></iframe>
+  <button id="closeBtn" type="button">닫기</button>
 
   <script src="https://unpkg.com/html5-qrcode"></script>
   <script>
     let qr = null;
-    let isHandlingSuccess = false;   // 성공 처리 중 잠금
-    let lastScannedCode = "";        // 마지막 인식값 기억
-    let lastScannedAt = 0;           // 마지막 인식 시각
-    let hasStopped = false;          // stop 중복 방지
-  
+    let isHandlingSuccess = false;
+    let hasStopped = false;
+    let lastScannedCode = "";
+    let lastScannedAt = 0;
+
     const DUPLICATE_IGNORE_MS = 3000;
-  
+    const QR_PATTERN = /^NTQCM\d{8}-\d{3}$/;
+
     function qs(name) {
       return new URL(location.href).searchParams.get(name) || "";
     }
-  
+
     function setStatus(msg, type) {
       const el = document.getElementById("status");
       el.textContent = msg;
       el.className = type || "";
     }
-  
+
     async function safeStopScanner() {
       if (!qr || hasStopped) return;
       hasStopped = true;
-  
+
       try {
         await qr.stop();
       } catch (e) {
         console.warn("스캐너 중지 경고:", e);
       }
     }
-  
+
+    async function safeClearScanner() {
+      if (!qr) return;
+
+      try {
+        await qr.clear();
+      } catch (e) {
+        console.warn("스캐너 clear 경고:", e);
+      }
+    }
+
+    async function closeWindowGracefully() {
+      try {
+        window.close();
+      } catch (e) {}
+
+      setTimeout(() => {
+        setStatus("자동으로 닫히지 않으면 '닫기' 버튼을 눌러주세요.", "");
+      }, 500);
+    }
+
     async function handleScanSuccess(decodedText) {
       const code = String(decodedText || "").trim();
       const now = Date.now();
-  
-      // 형식 불일치 무시
-      if (!/^NTQCM\d{8}-\d{3}$/.test(code)) {
+
+      if (!QR_PATTERN.test(code)) {
         return;
       }
-  
-      // 같은 코드의 연속 인식 무시
+
       if (code === lastScannedCode && (now - lastScannedAt) < DUPLICATE_IGNORE_MS) {
         return;
       }
-  
+
       lastScannedCode = code;
       lastScannedAt = now;
-  
-      // 이미 성공 처리 중이면 무시
+
       if (isHandlingSuccess) return;
       isHandlingSuccess = true;
-  
+
       setStatus("QR 확인: " + code, "ok");
-  
+
       if (navigator.vibrate) {
         navigator.vibrate(120);
       }
-  
-      // 사용자 체감 속도를 위해 먼저 화면상 완료 상태 반영
+
       document.body.style.pointerEvents = "none";
-  
-      // 즉시 스캐너 정지
+
       await safeStopScanner();
-  
+
       const parentOrigin = qs("parentOrigin") || "*";
-  
+
       try {
         if (window.opener && !window.opener.closed) {
           window.opener.postMessage(
@@ -98,12 +146,14 @@
             },
             parentOrigin
           );
-  
+
           setStatus("전송 완료. 창을 닫습니다...", "ok");
-  
+
+          await safeClearScanner();
+
           setTimeout(() => {
-            window.close();
-          }, 250);
+            closeWindowGracefully();
+          }, 200);
         } else {
           setStatus("원래 창을 찾을 수 없습니다.", "err");
           isHandlingSuccess = false;
@@ -116,40 +166,73 @@
         document.body.style.pointerEvents = "";
       }
     }
-  
+
+    async function tryStartScanner(cameraConfig, label) {
+      setStatus(label + " 카메라 연결 시도 중...", "");
+
+      await qr.start(
+        cameraConfig,
+        {
+          fps: 6,
+          qrbox: { width: 220, height: 220 },
+          aspectRatio: 1.0,
+          disableFlip: false
+        },
+        handleScanSuccess,
+        () => {}
+      );
+    }
+
     async function startScan() {
       try {
         qr = new Html5Qrcode("reader");
-  
-        await qr.start(
-          { facingMode: "environment" },
-          {
-            fps: 6, // 너무 높이면 중복 인식이 많아짐
-            qrbox: { width: 220, height: 220 }, // 박스 줄이면 처리량 감소
-            aspectRatio: 1.0
-          },
-          handleScanSuccess,
-          () => {
-            // 프레임 단위 실패 로그는 무시
+
+        try {
+          // 1차: 라이브러리에서 가장 안정적으로 먹는 패턴
+          await tryStartScanner(
+            { facingMode: { exact: "environment" } },
+            "후면"
+          );
+        } catch (err1) {
+          console.warn("exact environment 실패:", err1);
+
+          try {
+            // 2차: 느슨한 후면 카메라 지정
+            await tryStartScanner(
+              { facingMode: "environment" },
+              "environment"
+            );
+          } catch (err2) {
+            console.warn("string environment 실패:", err2);
+
+            // 3차: 아무 카메라나 열기
+            await tryStartScanner(
+              { facingMode: "user" },
+              "기본"
+            );
           }
-        );
-  
+        }
+
         setStatus("카메라 시작 완료", "");
       } catch (err) {
         console.error(err);
         setStatus("카메라 실행 실패: " + (err.message || err), "err");
       }
     }
-  
+
     document.getElementById("closeBtn").addEventListener("click", async () => {
       await safeStopScanner();
-      window.close();
+      await safeClearScanner();
+      closeWindowGracefully();
     });
-  
+
+    window.addEventListener("beforeunload", async () => {
+      try {
+        await safeStopScanner();
+      } catch (e) {}
+    });
+
     window.addEventListener("load", startScan);
   </script>
 </body>
 </html>
-
-
-
